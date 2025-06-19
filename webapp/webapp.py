@@ -24,6 +24,7 @@ import time
 import threading
 from flask import Flask, request, jsonify, send_from_directory
 import dnstwist
+import whois
 
 
 PORT = int(os.environ.get('PORT', 8000))
@@ -199,7 +200,30 @@ def api_stop(sid):
 			s.stop()
 			return jsonify({})
 	return jsonify({'message': 'Scan session not found'}), 404
+@app.route('/api/whois', methods=['GET'])
+def get_domain_info():
+    domain = request.args.get('domain')
+    if not domain:
+        return jsonify({"error": "Missing 'domain' query parameter"}), 400
 
+    try:
+        data = whois.whois(domain)
+        creation_date = data.creation_date
+
+        # Handle list vs single datetime (some registrars return a list)
+        if isinstance(creation_date, list):
+            creation_date = creation_date[0]
+
+        return jsonify({
+            "domain": domain,
+            "creation_date": str(creation_date)
+        })
+
+    except Exception as e:
+        return jsonify({
+            "domain": domain,
+            "error": f"WHOIS lookup failed: {str(e)}"
+        }), 500
 
 cleaner = threading.Thread(target=janitor, args=(sessions,))
 cleaner.daemon = True

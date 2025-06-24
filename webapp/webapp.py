@@ -327,6 +327,25 @@ def get_domain_info():
             "error": f"WHOIS lookup failed: {str(e)}"
         }), 500
 
+@app.route('/api/scans/in-process')
+def api_in_process_scans():
+    in_process = []
+    for s in sessions:
+        # A scan is in-process if there are jobs left or threads are still running
+        total = len(s.permutations())
+        remaining = max(s.jobs.qsize(), len(s.threads))
+        if remaining > 0:
+            in_process.append({
+                'id': s.id,
+                'domain': s.url.domain,
+                'total': total,
+                'remaining': remaining,
+                'complete': total - remaining,
+                'registered': len(s.permutations(registered=True)),
+                'timestamp': s.timestamp
+            })
+    return jsonify({'in_process_scans': in_process})
+
 cleaner = threading.Thread(target=janitor, args=(sessions,))
 cleaner.daemon = True
 cleaner.start()

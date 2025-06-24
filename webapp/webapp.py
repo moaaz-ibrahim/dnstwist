@@ -172,8 +172,8 @@ class Session():
 				'has_more': end_idx < total_count,
 				'next_offset': end_idx if end_idx < total_count else None
 			},
-			'registration_date_cache': self.registration_date_cache,
-			'registration_date_retry_count': self.registration_date_retry_count
+			# 'registration_date_cache': self.registration_date_cache,
+			# 'registration_date_retry_count': self.registration_date_retry_count
 		}
 
 	def status(self):

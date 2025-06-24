@@ -5,7 +5,7 @@ services:
       context: .
       dockerfile: webapp/Dockerfile
     ports:
-      - "8001:8000"
+      - "8000:8000"
     container_name: dnstwist-webapp
     environment:
       - PORT=8000

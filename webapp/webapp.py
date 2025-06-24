@@ -3,6 +3,7 @@
 
 r'''
 Created by Marcin Ulikowski <marcin@ulikowski.pl>
+Modified and added new features by Moaaz Ibrahim (github:moaaz-ibrahim)
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -60,6 +61,25 @@ def janitor(sessions):
 				sessions.remove(s)
 				continue
 
+def get_whois_creation_date(domain):
+	"""
+	Get the creation/registration date for a domain using WHOIS lookup
+	Returns the creation date as a string or None if lookup fails
+	"""
+	try:
+		print("Looking up")
+		data = whois.whois(domain)
+		creation_date = data.creation_date
+		
+		# Handle list vs single datetime (some registrars return a list)
+		if isinstance(creation_date, list):
+			creation_date = creation_date[0]
+			
+		return str(creation_date) if creation_date else None
+	except Exception as e:
+		print(f"WHOIS lookup failed for {domain}: {str(e)}")
+		return None
+
 class Session():
 	def __init__(self, url, nameservers=None, thread_count=THREADS):
 		self.id = str(uuid4())
@@ -95,6 +115,37 @@ class Session():
 
 	def domains(self):
 		return self.permutations(registered=True, unicode=True)
+
+	def domains_paginated(self, limit=50, offset=0, include_registration_date=False):
+		"""
+		Get paginated domains with optional registration date information
+		"""
+		all_domains = self.permutations(registered=True, unicode=True)
+		total_count = len(all_domains)
+		
+		# Apply pagination
+		start_idx = offset
+		end_idx = offset + limit
+		paginated_domains = all_domains[start_idx:end_idx]
+		
+		# Add registration date information if requested
+		if include_registration_date:
+			for domain_info in paginated_domains:
+				if 'domain' in domain_info:
+					domain_name = domain_info['domain']
+					registration_date = get_whois_creation_date(domain_name)
+					domain_info['registration_date'] = registration_date
+		
+		return {
+			'domains': paginated_domains,
+			'pagination': {
+				'total': total_count,
+				'limit': limit,
+				'offset': offset,
+				'has_more': end_idx < total_count,
+				'next_offset': end_idx if end_idx < total_count else None
+			}
+		}
 
 	def status(self):
 		total = len(self.permutations())
@@ -163,9 +214,29 @@ def api_status(sid):
 
 @app.route('/api/scans/<sid>/domains')
 def api_domains(sid):
+	# Get query parameters for pagination
+	limit = request.args.get('limit', default=5, type=int)
+	offset = request.args.get('offset', default=0, type=int)
+	include_registration_date = request.args.get('include_registration_date', default='false').lower() == 'true'
+	
+	# Validate parameters
+	if limit <= 0 or limit > 1000:  # Set reasonable limits
+		return jsonify({'message': 'Limit must be between 1 and 1000'}), 400
+	if offset < 0:
+		return jsonify({'message': 'Offset must be non-negative'}), 400
+	
 	for s in sessions:
 		if s.id == sid:
-			return jsonify(s.domains())
+			try:
+				result = s.domains_paginated(
+					limit=limit, 
+					offset=offset, 
+					include_registration_date=include_registration_date
+				)
+				return jsonify(result)
+			except Exception as e:
+				return jsonify({'message': f'Error retrieving domains: {str(e)}'}), 500
+	
 	return jsonify({'message': 'Scan session not found'}), 404
 
 
@@ -200,6 +271,7 @@ def api_stop(sid):
 			s.stop()
 			return jsonify({})
 	return jsonify({'message': 'Scan session not found'}), 404
+
 @app.route('/api/whois', methods=['GET'])
 def get_domain_info():
     domain = request.args.get('domain')

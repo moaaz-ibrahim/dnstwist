@@ -298,6 +298,7 @@ def api_stop(sid):
 	for s in sessions:
 		if s.id == sid:
 			s.stop()
+			sessions.remove(s)  # Remove session to free memory
 			return jsonify({})
 	return jsonify({'message': 'Scan session not found'}), 404
 

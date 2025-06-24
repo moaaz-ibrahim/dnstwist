@@ -26,6 +26,7 @@ import threading
 from flask import Flask, request, jsonify, send_from_directory
 import dnstwist
 import whois
+import concurrent.futures
 
 
 PORT = int(os.environ.get('PORT', 8000))
@@ -92,6 +93,29 @@ class Session():
 		self.fuzzer = dnstwist.Fuzzer(self.url.domain, dictionary=DICTIONARY, tld_dictionary=TLD_DICTIONARY)
 		self.fuzzer.generate()
 		self.permutations = self.fuzzer.permutations
+		# Registration date cache and thread pool for async WHOIS
+		self.registration_date_cache = {}
+		self.registration_date_retry_count = {}
+		self.whois_executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+		self.max_whois_retries = 3
+		self.whois_retry_delay = 5  # seconds
+
+	def _async_whois(self, domain, retry_count=0):
+		if domain not in self.registration_date_cache or (self.registration_date_cache[domain] is None and retry_count < self.max_whois_retries):
+			def fetch_and_store():
+				date = get_whois_creation_date(domain)
+				if date is not None:
+					self.registration_date_cache[domain] = date
+				else:
+					# Retry if under max retries
+					current_retries = self.registration_date_retry_count.get(domain, 0)
+					if current_retries < self.max_whois_retries:
+						self.registration_date_retry_count[domain] = current_retries + 1
+						import threading
+						threading.Timer(self.whois_retry_delay, lambda: self._async_whois(domain, retry_count=current_retries + 1)).start()
+					else:
+						self.registration_date_cache[domain] = None  # Give up after max retries
+			self.whois_executor.submit(fetch_and_store)
 
 	def scan(self):
 		for domain in self.fuzzer.domains:
@@ -122,20 +146,23 @@ class Session():
 		"""
 		all_domains = self.permutations(registered=True, unicode=True)
 		total_count = len(all_domains)
-		
 		# Apply pagination
 		start_idx = offset
 		end_idx = offset + limit
 		paginated_domains = all_domains[start_idx:end_idx]
-		
-		# Add registration date information if requested
+		# Add registration date information if requested (non-blocking)
 		if include_registration_date:
 			for domain_info in paginated_domains:
 				if 'domain' in domain_info:
 					domain_name = domain_info['domain']
-					registration_date = get_whois_creation_date(domain_name)
-					domain_info['registration_date'] = registration_date
-		
+					if domain_name in self.registration_date_cache:
+						domain_info['registration_date'] = self.registration_date_cache[domain_name]
+					else:
+						domain_info['registration_date'] = None  # or "pending"
+					# Always try to fetch if not present or still None and not maxed out
+					current_retries = self.registration_date_retry_count.get(domain_name, 0)
+					if (domain_info['registration_date'] is None and current_retries < self.max_whois_retries):
+						self._async_whois(domain_name, retry_count=current_retries)
 		return {
 			'domains': paginated_domains,
 			'pagination': {
@@ -144,7 +171,9 @@ class Session():
 				'offset': offset,
 				'has_more': end_idx < total_count,
 				'next_offset': end_idx if end_idx < total_count else None
-			}
+			},
+			'registration_date_cache': self.registration_date_cache,
+			'registration_date_retry_count': self.registration_date_retry_count
 		}
 
 	def status(self):

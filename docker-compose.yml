@@ -6,7 +6,7 @@ services:
       dockerfile: webapp/Dockerfile
     ports:
       - "8000:8000"
-    container_name: dnstwist-webapp
+    container_name: dnstwist-separated-webapp
     environment:
       - PORT=8000
     restart: unless-stopped 

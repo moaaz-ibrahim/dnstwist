@@ -344,7 +344,7 @@ def api_in_process_scans():
                 'registered': len(s.permutations(registered=True)),
                 'timestamp': s.timestamp
             })
-    return jsonify({'in_process_scans': in_process})
+    return jsonify(in_process)
 
 cleaner = threading.Thread(target=janitor, args=(sessions,))
 cleaner.daemon = True

@@ -28,6 +28,7 @@ SESSION_MAX = int(os.environ.get('SESSION_MAX', 10))
 DOMAIN_MAXLEN = int(os.environ.get('DOMAIN_MAXLEN', 15))
 WEBAPP_HTML = os.environ.get('WEBAPP_HTML', 'webapp.html')
 WEBAPP_DIR = os.environ.get('WEBAPP_DIR', os.path.dirname(os.path.abspath(__file__)))
+# WE SHOULD IMPLEMENT API KEYS ACCESSING MAING APP SERVICE
 
 DOMAIN_BLOCKLIST = []
 
@@ -85,6 +86,7 @@ class Session:
         self.whois_executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
         self.max_whois_retries = 3
         self.whois_retry_delay = 5
+        self.scan_limit = 100
 
     def _async_whois(self, domain, retry_count=0, callback=None):
         if domain not in self.registration_date_cache or (
@@ -163,10 +165,17 @@ class Session:
     def tag_registered_domains(self):
         saved_results = set()  # Track domains that have been saved to results
         print("Starting tag_registered_domains")
-
         while any(t.is_alive() for t in self.threads):
+            remaining = max(self.jobs.qsize(), len(self.threads))
+            current_results_len = len(self.domains_results)
+            print(f"Scanning Limit: {self.scan_limit}, Remaining: {remaining}, Current Results Length: {current_results_len}")
+            if current_results_len >= self.scan_limit or remaining == 0:
+                print(f"Scanning Limit Reached: {self.scan_limit}, or Remaining: {remaining} is 0, Current Results Length: {current_results_len}")
+                break
+            
             for d in self.permutations(registered=True, unicode=True):
                 if 'domain' in d:
+                    print(f"Processing domain: {max(self.jobs.qsize(), len(self.threads))}")
                     domain_name = d['domain']
                     if domain_name not in saved_results:
                         print(f"Processing domain: {domain_name}")
@@ -190,6 +199,11 @@ class Session:
             print(f"Current results count: {len(self.domains_results)}")
             print(f"Saved results set: {saved_results}")
             time.sleep(2)  # Run every 2 seconds
+        self.on_tagging_complete()
+
+    def on_tagging_complete(self):
+        print(f"Tagging complete, {self.domains_results}")
+        # TODO: Send the results to the main app service using the API KEY
 
     def status(self):
         total = len(self.permutations())

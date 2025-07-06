@@ -18,6 +18,8 @@ import dnstwist
 import whois
 import concurrent.futures
 import functools
+import redis
+import json
 
 PORT = int(os.environ.get('PORT', 8000))
 HOST = os.environ.get('HOST', '127.0.0.1')
@@ -28,7 +30,38 @@ SESSION_MAX = int(os.environ.get('SESSION_MAX', 10))
 DOMAIN_MAXLEN = int(os.environ.get('DOMAIN_MAXLEN', 15))
 WEBAPP_HTML = os.environ.get('WEBAPP_HTML', 'webapp.html')
 WEBAPP_DIR = os.environ.get('WEBAPP_DIR', os.path.dirname(os.path.abspath(__file__)))
-# WE SHOULD IMPLEMENT API KEYS ACCESSING MAING APP SERVICE
+REDIS_PREFIX = os.environ.get('REDIS_PREFIX', 'dnstwist:')
+QUEUE_KEY = os.environ.get('QUEUE_KEY', 'typosquatting:scan_queue')
+SCAN_LIMIT = int(os.environ.get('SCAN_LIMIT', 100))
+
+print("Testing Redis connection...")
+print(f"REDIS_HOST: {os.environ.get('REDIS_HOST', 'localhost')}")
+print(f"REDIS_PORT: {os.environ.get('REDIS_PORT', 6379)}")
+print(f"REDIS_PASSWORD: {'*' * len(os.environ.get('REDIS_PASSWORD', ''))}") # Hide password in logs
+
+try:
+    client = redis.Redis(
+        host=os.environ.get('REDIS_HOST', 'localhost'),
+        port=int(os.environ.get('REDIS_PORT', 6379)),
+        db=int(os.environ.get('REDIS_DB', 0)),
+        password=os.environ.get('REDIS_PASSWORD'),  # Add password authentication
+        decode_responses=True
+    )
+    
+    result = client.ping()
+    print(f"✅ Redis PING successful: {result}")
+    
+    # Test basic operations
+    client.set("test_key", "hello_world")
+    value = client.get("test_key")
+    print(f"✅ Redis SET/GET successful: {value}")
+    
+except redis.ConnectionError as e:
+    print(f"❌ Redis ConnectionError: {e}")
+except redis.AuthenticationError as e:
+    print(f"❌ Redis Authentication Error: {e}")
+except Exception as e:
+    print(f"❌ Other error: {e}")
 
 DOMAIN_BLOCKLIST = []
 
@@ -86,7 +119,7 @@ class Session:
         self.whois_executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
         self.max_whois_retries = 3
         self.whois_retry_delay = 5
-        self.scan_limit = 100
+        self.scan_limit = SCAN_LIMIT
 
     def _async_whois(self, domain, retry_count=0, callback=None):
         if domain not in self.registration_date_cache or (
@@ -170,6 +203,7 @@ class Session:
             current_results_len = len(self.domains_results)
             print(f"Scanning Limit: {self.scan_limit}, Remaining: {remaining}, Current Results Length: {current_results_len}")
             if current_results_len >= self.scan_limit or remaining == 0:
+                self.stop()
                 print(f"Scanning Limit Reached: {self.scan_limit}, or Remaining: {remaining} is 0, Current Results Length: {current_results_len}")
                 break
             
@@ -202,8 +236,40 @@ class Session:
         self.on_tagging_complete()
 
     def on_tagging_complete(self):
-        print(f"Tagging complete, {self.domains_results}")
-        # TODO: Send the results to the main app service using the API KEY
+        print(f"Tagging complete, {self.url.domain} - {self.domains_results}")
+        try:
+            # Test Redis connection before proceeding
+            if not client.ping():
+                raise ConnectionError("Redis server is not responding")
+
+            # Create a key for storing the scan results
+            scan_key = f"{QUEUE_KEY}-scan:{self.url.domain}"
+            
+            # Prepare the data to store
+            scan_data = {
+                'scan_id': self.id,
+                'domain': self.url.domain,
+                'timestamp': self.timestamp,
+                'results': self.domains_results,
+                'total_domains': len(self.domains_results)
+            }
+            queue_key = f"{QUEUE_KEY}"
+            # Store the scan results in Redis with expiration
+            # client.setex(
+            #     scan_key,
+            #     SESSION_TTL,  # Use the same TTL as session (an hour)
+            #     json.dumps(scan_data)
+            # )
+            
+            # Add scan ID to a list of completed scans
+            client.rpush(queue_key, json.dumps(scan_data))
+            
+            print(f"✅ Enqueued scan result for domain: {self.url.domain} in Redis list: {queue_key}")
+        except ConnectionError as e:
+            print(f"Redis connection error: {str(e)}")
+            print(f"Please ensure Redis is running and accessible")
+        except Exception as e:
+            print(f"Error storing results in Redis: {str(e)}")
 
     def status(self):
         total = len(self.permutations())

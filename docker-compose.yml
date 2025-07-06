@@ -9,4 +9,19 @@ services:
     container_name: dnstwist-separated-webapp
     environment:
       - PORT=8000
-    restart: unless-stopped 
+      - REDIS_HOST=redis  # Point to the Redis service
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=your_strong_redis_password  # Add Redis password
+      - QUEUE_KEY=typosquatting:scan_queue
+      - SCAN_LIMIT=3
+    restart: unless-stopped
+    depends_on:
+      - redis
+  
+  redis:
+    image: redis:latest
+    container_name: redis-server-dnstwist
+    command: redis-server --requirepass your_strong_redis_password  # Set Redis password
+    ports:
+      - "6379:6379"  # Optional: only if you want to access Redis from host
+    restart: unless-stopped

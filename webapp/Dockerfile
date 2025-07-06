@@ -9,7 +9,7 @@ COPY       webapp/webapp.py /opt/dnstwist/webapp.py
 COPY       webapp/webapp.html /opt/dnstwist/webapp.html
 COPY       ../dnstwist.py /opt/dnstwist/
 
-RUN        pip install flask gunicorn dnspython geoip2 tld idna python-whois
+RUN        pip install flask gunicorn dnspython geoip2 tld idna python-whois redis
 
 EXPOSE     8000
 

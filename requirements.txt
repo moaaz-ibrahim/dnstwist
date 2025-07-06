@@ -8,3 +8,4 @@ tld>=0.9.1
 idna>=2.8
 #Pillow>=7.0.0
 #selenium>=4.0.0
+redis>=4.5.0

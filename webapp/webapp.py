@@ -224,7 +224,7 @@ class Session:
                                 self.domains_results.append(domain_data)
                                 saved_results.add(domain_name)
                             else:
-                                print(f"Skipping save for {domain_name} - already in results")
+                                print(f"Skipping save for {domain_name} - already in results XXXXX")
 
                         # Use functools.partial to bind the right values
                         self._async_whois(domain_name, callback=functools.partial(save_result))

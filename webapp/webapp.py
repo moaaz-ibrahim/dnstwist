@@ -20,6 +20,10 @@ import concurrent.futures
 import functools
 import redis
 import json
+import sys  # Add this import
+
+# Force flush for all print statements
+print = functools.partial(print, flush=True)
 
 PORT = int(os.environ.get('PORT', 8000))
 HOST = os.environ.get('HOST', '127.0.0.1')
@@ -154,7 +158,7 @@ class Session:
             worker.start()
             self.threads.append(worker)
 
-        tag_thread = threading.Thread(target=self.tag_registered_domains)
+        tag_thread = threading.Thread(target=self.tag_registered_domains_2)
         tag_thread.daemon = True
         tag_thread.start()
 
@@ -195,25 +199,85 @@ class Session:
             }
         }
 
+
+
+    def _process_domains(self, domains):
+        """Helper method to process domains and add them to domains_results"""
+        total_domains = len(domains)-1
+        print(f"Starting to process {total_domains} domains")
+        
+        for idx, data in enumerate(domains, 1):
+            domain_data = data.copy()
+            domain_name = data['domain']
+            def save_result(date, domain_data=domain_data, domain_name=domain_name):
+                print(f"Saving result for {domain_name} with date")
+                domain_data['creation_date'] = date
+                self.domains_results.append(domain_data)
+                if len(self.domains_results) == total_domains:
+                    print(f"=== END OF PROCESSING - ALL DOMAINS PROCESSED === {self.url.domain}")
+                    self.on_tagging_complete()
+            self._async_whois(domain_name, retry_count=3,callback=functools.partial(save_result))
+        
+        print(f"Initiated processing for all {total_domains} domains")
+
+    def tag_registered_domains_2(self):
+        saved_results = set()
+        print("Starting tag_registered_domains")
+        original_registered = 0
+        
+        while any(t.is_alive() for t in self.threads):
+            registered = len(self.permutations(registered=True))
+            remaining = max(self.jobs.qsize(), len(self.threads))
+            current_results_len = len(self.domains_results)
+            d = self.permutations(registered=True, unicode=True)
+            print(f"Scanning Limit: {self.scan_limit}, "
+                f"Remaining: {remaining}, "
+                f"Current Results Length: {current_results_len}, "
+                f"Registered: {registered}")
+            original_registered = registered  # Update the count
+            
+            if (len(d) >= self.scan_limit or remaining == 0):
+                self.stop()
+                print(f"Scanning Limit Reached: {self.scan_limit}, "
+                    f"Domains Length: {len(d)}, "
+                    f"Remaining: {remaining}, ")
+                self._process_domains(d)
+            else:
+                print(f"CHECK FAILED, remaining: {remaining} , len(d): {len(d)}")
+            
+            time.sleep(2)  # Add small delay to prevent CPU overuse
+
+        if len(self.domains_results) == 0:
+            print(f"No results found, domains_results length: {len(self.domains_results)}")
+            d = self.permutations(registered=True, unicode=True)
+            self._process_domains(d)
+
+
     def tag_registered_domains(self):
         saved_results = set()  # Track domains that have been saved to results
         print("Starting tag_registered_domains")
+
         while any(t.is_alive() for t in self.threads):
-            remaining = max(self.jobs.qsize(), len(self.threads))
-            current_results_len = len(self.domains_results)
-            print(f"Scanning Limit: {self.scan_limit}, Remaining: {remaining}, Current Results Length: {current_results_len}")
-            if current_results_len >= self.scan_limit or remaining == 0:
-                self.stop()
-                print(f"Scanning Limit Reached: {self.scan_limit}, or Remaining: {remaining} is 0, Current Results Length: {current_results_len}")
-                break
-            
             for d in self.permutations(registered=True, unicode=True):
+                remaining = max(self.jobs.qsize(), len(self.threads))
+                registered = len(self.permutations(registered=True))
+                current_results_len = len(self.domains_results)
+                print(f"Scanning Limit: {self.scan_limit}, "
+                      f"Remaining: {remaining}, "
+                      f"Current Results Length: {current_results_len}")
+                
+                if current_results_len >= self.scan_limit or registered == current_results_len:
+                    self.stop()
+                    print(f"Scanning Limit Reached: {self.scan_limit}, "
+                          f"or Remaining: {remaining} is 0, "
+                          f"Current Results Length: {current_results_len}")
+                    break
+
                 if 'domain' in d:
                     print(f"Processing domain: {max(self.jobs.qsize(), len(self.threads))}")
                     domain_name = d['domain']
                     if domain_name not in saved_results:
                         print(f"Processing domain: {domain_name}")
-
                         domain_data = d.copy()
 
                         def save_result(date, domain_data=domain_data, domain_name=domain_name):
@@ -230,9 +294,11 @@ class Session:
                         self._async_whois(domain_name, callback=functools.partial(save_result))
                     else:
                         print(f"Skipping already saved domain: {domain_name}")
-            print(f"Current results count: {len(self.domains_results)}")
-            print(f"Saved results set: {saved_results}")
+                
             time.sleep(2)  # Run every 2 seconds
+
+        # Final status print after all processing is complete
+        print(f"PROCESSING COMPLETE - Final results count: {len(self.domains_results)}, remaining tasks: {max(self.jobs.qsize(), len(self.threads))}")
         self.on_tagging_complete()
 
     def on_tagging_complete(self):
@@ -264,7 +330,7 @@ class Session:
             # Add scan ID to a list of completed scans
             client.rpush(queue_key, json.dumps(scan_data))
             
-            print(f"✅ Enqueued scan result for domain: {self.url.domain} in Redis list: {queue_key}")
+            print(f"✅ Enqueued scan result for domain: {self.url.domain} in Redis list: {queue_key}, with total results: {len(self.domains_results)}")
         except ConnectionError as e:
             print(f"Redis connection error: {str(e)}")
             print(f"Please ensure Redis is running and accessible")
